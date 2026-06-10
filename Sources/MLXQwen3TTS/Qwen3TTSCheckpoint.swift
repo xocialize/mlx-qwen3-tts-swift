@@ -26,9 +26,6 @@ public enum Qwen3TTSSize: String, Sendable, Codable, CaseIterable {
 }
 
 /// Checkpoint quantization, named by the mlx-community repo suffix.
-///
-/// Note: 5-bit and 6-bit have no `MLXToolKit.Quant` case yet, so manifest footprints are
-/// declared for 4-bit / 8-bit / bf16 only; 5/6-bit checkpoints remain loadable via the catalog.
 public enum Qwen3TTSCheckpointQuant: String, Sendable, Codable, CaseIterable {
     case q4 = "4bit"
     case q5 = "5bit"
@@ -47,13 +44,14 @@ public enum Qwen3TTSCheckpointQuant: String, Sendable, Codable, CaseIterable {
         }
     }
 
-    /// The closest `MLXToolKit.Quant`, where one exists.
-    var toolKitQuant: Quant? {
+    /// The matching `MLXToolKit.Quant` (int5/int6 added in contract 1.1.0).
+    var toolKitQuant: Quant {
         switch self {
         case .q4: return .int4
+        case .q5: return .int5
+        case .q6: return .int6
         case .q8: return .int8
         case .bf16: return .bf16
-        case .q5, .q6: return nil
         }
     }
 }

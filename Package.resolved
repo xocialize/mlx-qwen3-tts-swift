@@ -1,5 +1,5 @@
 {
-  "originHash" : "3527683f2a5586adf3b1c9679f380e0c22741bd24371290e941cb8ae236b4b6b",
+  "originHash" : "b6ddb72f799df2cf86e28665da533fae58c84df7cbe10576e4836484017f7516",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "dc43e62d7055353c7f99fa071a4e71d29dfddc44",
         "version" : "0.31.4"
+      }
+    },
+    {
+      "identity" : "qwen3-tts-mlx-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/qwen3-tts-mlx-swift.git",
+      "state" : {
+        "revision" : "c3c7c9ce4dcd937cea10e22e66d8e0a94d01941c",
+        "version" : "0.1.0"
       }
     },
     {

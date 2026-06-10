@@ -14,11 +14,10 @@ import Qwen3TTSCloning
 /// materialized under the engine's models root when set), drives `run(_:)`, and reclaims with
 /// `unload()`. Returns the canonical `Audio` (.wav, 24 kHz mono) artifact.
 ///
+/// The reference transcript rides the canonical `TTSRequest.referenceTranscript` field
+/// (contract 1.1.0 — promoted from `metaData` when this wrap surfaced the gap).
 /// `metaData` keys (package-specific, C5): `language` (synthesis language, default from
-/// configuration), `instruct` (CustomVoice emotion instruct / VoiceDesign voice description),
-/// `referenceText` (reference transcript — upgrades `.referenceAudio` from x-vector to ICL).
-/// Note: a reference *transcript* is arguably should-be-canonical for ICL-capable TTS
-/// (VoxCPM2 needs the same lever) — candidate for a TTS schema revision; tracked as a gap.
+/// configuration), `instruct` (CustomVoice emotion instruct / VoiceDesign voice description).
 @InferenceActor
 public final class Qwen3TTSPackage: ModelPackage {
     public typealias Configuration = Qwen3TTSConfiguration
@@ -31,24 +30,17 @@ public final class Qwen3TTSPackage: ModelPackage {
             provenance: Provenance(
                 sourceRepo: Qwen3TTSCheckpoint.default.repoID, revision: "main", tier: 1),
             requirements: RequirementsManifest(
-                // Footprints for the default 1.7B Base checkpoint. Quantized Talker+CodePredictor
-                // plus the bf16 codec stack (decoder/encoder/speaker encoder) and headroom.
+                // Footprints for the default 1.7B Base checkpoint across the full quant catalog
+                // (int5/int6 added in contract 1.1.0). Quantized Talker+CodePredictor plus the
+                // bf16 codec stack (decoder/encoder/speaker encoder) and headroom.
                 // Static-manifest caveat (same as mlx-qwen-llm-swift): admission gates on the
-                // default variant; per-configured-checkpoint gating is a follow-up.
-                footprints: [
+                // default variant; per-configured-checkpoint gating is a follow-up (gap log).
+                footprints: Qwen3TTSCheckpointQuant.allCases.map { quant in
                     QuantFootprint(
-                        quant: .int4,
-                        residentBytes: Qwen3TTSCheckpoint(variant: .base, size: .s1_7B, quant: .q4)
-                            .estimatedResidentBytes),
-                    QuantFootprint(
-                        quant: .int8,
-                        residentBytes: Qwen3TTSCheckpoint(variant: .base, size: .s1_7B, quant: .q8)
-                            .estimatedResidentBytes),
-                    QuantFootprint(
-                        quant: .bf16,
-                        residentBytes: Qwen3TTSCheckpoint(variant: .base, size: .s1_7B, quant: .bf16)
-                            .estimatedResidentBytes),
-                ],
+                        quant: quant.toolKitQuant,
+                        residentBytes: Qwen3TTSCheckpoint(variant: .base, size: .s1_7B, quant: quant)
+                            .estimatedResidentBytes)
+                },
                 requiredBackends: [.metalGPU],
                 os: OSRequirement(minMacOS: SemanticVersion(major: 26, minor: 0, patch: 0)),
                 chipFloor: nil
@@ -140,7 +132,7 @@ public final class Qwen3TTSPackage: ModelPackage {
 
         case .referenceAudio(let reference):
             let (refSamples, refRate) = try Self.decodeWAV(reference)
-            if let referenceText = tts.metaData.stringValue("referenceText"),
+            if let referenceText = tts.referenceTranscript,
                !referenceText.isEmpty, let tokenizer {
                 // Full ICL cloning: reference codes + transcript + speaker embedding.
                 let cloning = VoiceCloningEngine(model: model, tokenizer: tokenizer)

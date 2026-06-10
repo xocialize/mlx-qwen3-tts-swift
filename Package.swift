@@ -17,8 +17,10 @@ let package = Package(
         .library(name: "MLXQwen3TTS", targets: ["MLXQwen3TTS"]),
     ],
     dependencies: [
+        // The engine contract is a local-path dep for in-workspace dev (workspace convention);
+        // the Qwen3TTS core is pinned to a tagged release.
         .package(path: "../mlx-engine-swift"),
-        .package(path: "../qwen3-tts-mlx-swift"),
+        .package(url: "https://github.com/xocialize/qwen3-tts-mlx-swift.git", from: "0.1.0"),
     ],
     targets: [
         .target(
