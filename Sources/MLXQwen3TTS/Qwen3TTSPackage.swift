@@ -62,6 +62,15 @@ public final class Qwen3TTSPackage: ModelPackage {
     // lifecycle calls on InferenceActor, so there's no real concurrency (see Package.swift).
     private var model: Qwen3TTSModel?
     private var tokenizer: Qwen3Tokenizer?
+    // Voice-clone prompt reuse (E1): building an ICL prompt re-runs ECAPA speaker
+    // embedding + native codec encode + tokenization of the reference. Long-form
+    // synthesis (e.g. TTSOrchestratorKit anchor-to-first-segment) sends the *same*
+    // reference for every chunk, so we memoize the prepared prompt keyed by the
+    // (reference bytes, transcript, language) triple and skip that work on reuse.
+    // Safe to hold across calls: InferenceActor serializes run(), and VoiceClonePrompt
+    // is read-only once built.
+    private var cloningEngine: VoiceCloningEngine?
+    private var cachedClonePrompt: (key: Int, prompt: VoiceClonePrompt)?
 
     public nonisolated init(configuration: Configuration) {
         self.configuration = configuration
@@ -109,6 +118,8 @@ public final class Qwen3TTSPackage: ModelPackage {
     public func unload() async {
         model = nil
         tokenizer = nil
+        cloningEngine = nil
+        cachedClonePrompt = nil
     }
 
     public func run(_ request: any CapabilityRequest) async throws -> any CapabilityResponse {
@@ -131,18 +142,29 @@ public final class Qwen3TTSPackage: ModelPackage {
                 text: tts.text, language: language, speaker: speaker, instruct: instruct)
 
         case .referenceAudio(let reference):
-            let (refSamples, refRate) = try Self.decodeWAV(reference)
             if let referenceText = tts.referenceTranscript,
                !referenceText.isEmpty, let tokenizer {
                 // Full ICL cloning: reference codes + transcript + speaker embedding.
-                let cloning = VoiceCloningEngine(model: model, tokenizer: tokenizer)
-                let prompt = try cloning.createPrompt(
-                    referenceAudio: refSamples, referenceText: referenceText,
-                    sampleRate: refRate, language: language)
+                let engine = cloningEngine ?? VoiceCloningEngine(model: model, tokenizer: tokenizer)
+                cloningEngine = engine
+
+                // Reuse the prepared prompt when the same reference repeats (E1).
+                let key = Self.cloneKey(data: reference.data, text: referenceText, language: language)
+                let prompt: VoiceClonePrompt
+                if let cached = cachedClonePrompt, cached.key == key {
+                    prompt = cached.prompt
+                } else {
+                    let (refSamples, refRate) = try Self.decodeWAV(reference)
+                    prompt = try engine.createPrompt(
+                        referenceAudio: refSamples, referenceText: referenceText,
+                        sampleRate: refRate, language: language)
+                    cachedClonePrompt = (key, prompt)
+                }
                 try Task.checkCancellation()
-                samples = try cloning.synthesize(text: tts.text, prompt: prompt, mode: .icl)
+                samples = try engine.synthesize(text: tts.text, prompt: prompt, mode: .icl)
             } else {
                 // x-vector cloning: speaker embedding only (no transcript required).
+                let (refSamples, refRate) = try Self.decodeWAV(reference)
                 samples = model.synthesizeWithVoiceClone(
                     text: tts.text, referenceAudio: refSamples,
                     referenceSampleRate: refRate, language: language)
@@ -152,6 +174,19 @@ public final class Qwen3TTSPackage: ModelPackage {
         try Task.checkCancellation()
         let wav = Self.encodeWAV16(samples: samples, sampleRate: 24_000)
         return TTSResponse(audio: Audio(format: .wav, data: wav, sampleRate: 24_000, channels: 1))
+    }
+
+    // MARK: - Voice-clone prompt cache key (E1)
+
+    /// Cache key for a prepared ICL prompt: the reference clip bytes + transcript +
+    /// synthesis language. In-memory only (Hasher is per-process seeded), which is all
+    /// we need — reuse happens within a single long-form run.
+    nonisolated static func cloneKey(data: Data, text: String, language: String) -> Int {
+        var hasher = Hasher()
+        hasher.combine(data)
+        hasher.combine(text)
+        hasher.combine(language)
+        return hasher.finalize()
     }
 
     // MARK: - Weights materialization
