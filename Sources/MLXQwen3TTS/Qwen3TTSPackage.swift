@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import MLXToolKit
 import Qwen3TTS
 import AudioCommon
@@ -126,6 +127,7 @@ public final class Qwen3TTSPackage: ModelPackage {
         tokenizer = nil
         cloningEngine = nil
         cachedClonePrompt = nil
+        MLX.Memory.clearCache()   // release the retained MLX pool so eviction frees RSS (not just drop refs)
     }
 
     public func run(_ request: any CapabilityRequest) async throws -> any CapabilityResponse {

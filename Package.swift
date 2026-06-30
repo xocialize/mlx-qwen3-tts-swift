@@ -21,12 +21,16 @@ let package = Package(
         // release. Bumped to 0.15.0 (contract 1.14.0) for the split-footprint efficiency contract.
         .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.15.0"),
         .package(url: "https://github.com/xocialize/qwen3-tts-mlx-swift.git", from: "0.1.0"),
+        // mlx-swift, for MLX.Memory.clearCache() in the wrapper's unload(). Pinned to the
+        // revision the Qwen3TTS core already resolves (0.31.4) so this adds no resolution churn.
+        .package(url: "https://github.com/ml-explore/mlx-swift.git", from: "0.31.4"),
     ],
     targets: [
         .target(
             name: "MLXQwen3TTS",
             dependencies: [
                 .product(name: "MLXToolKit", package: "mlx-engine-swift"),
+                .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "Qwen3TTS", package: "qwen3-tts-mlx-swift"),
                 .product(name: "AudioCommon", package: "qwen3-tts-mlx-swift"),
                 .product(name: "Qwen3TTSCloning", package: "qwen3-tts-mlx-swift"),
