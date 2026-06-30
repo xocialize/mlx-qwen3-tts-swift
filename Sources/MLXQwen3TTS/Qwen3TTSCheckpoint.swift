@@ -103,10 +103,31 @@ public struct Qwen3TTSCheckpoint: Sendable, Codable, Equatable {
 
     /// Estimated resident bytes: quantized Talker + CodePredictor, plus the bf16 codec stack
     /// (speech tokenizer decoder + encoder + speaker encoder, ~0.7 GB) and runtime headroom.
+    /// This is the persistent **weights floor** (contract 1.14 `residentBytes`) — the transient
+    /// generation scratch is split out into `peakActivationBytes`, NOT folded in here.
     public var estimatedResidentBytes: UInt64 {
         let talkerBytes = Double(size.parameterCount) * quant.bytesPerParameter
         let codecStackBytes = 700_000_000.0
         let headroom = 500_000_000.0
         return UInt64(talkerBytes + codecStackBytes + headroom)
+    }
+
+    /// The **measured** autoregressive transient (contract 1.14 `peakActivationBytes`) — the Talker
+    /// generation scratch (KV/cache + decode buffers) live only during a forward pass, on top of the
+    /// resident weights. The Talker is autoregressive, so this is generation scratch that scales with
+    /// the generated audio-token length; it is largely quant-independent (it's the activation graph,
+    /// not the weights) and scales with model size.
+    ///
+    /// **Measured** (the "measure the transient, don't derive it" lesson) on **1.7B Base 8bit** via
+    /// the package's own gated bench (`Qwen3TTSMemoryReport`, Q3T_MEM=1) at a documented synth
+    /// envelope — zero-shot, ~168 chars → ~10 s of 24 kHz audio (the 12 Hz codec, the representative
+    /// chunk a long-form orchestrator sends): resident floor 2.65 GB · worst peak 6.66 GB ⇒
+    /// transient ≈ 4.0 GB. Declared with ~20% headroom (memory-harness.md) → ~4.8 GB at 1.7B, scaled
+    /// linearly by parameter count for the 0.6B tier (activations track sequence × hidden, ~size).
+    public var estimatedPeakActivationBytes: UInt64 {
+        // Measured base: 1.7B → ~4.0 GB transient + 20% headroom ≈ 4.8 GB.
+        let base1_7B = 4_800_000_000.0
+        let scale = Double(size.parameterCount) / 1_700_000_000.0
+        return UInt64(base1_7B * scale)
     }
 }

@@ -17,9 +17,9 @@ let package = Package(
         .library(name: "MLXQwen3TTS", targets: ["MLXQwen3TTS"]),
     ],
     dependencies: [
-        // The engine contract is a local-path dep for in-workspace dev (workspace convention);
-        // the Qwen3TTS core is pinned to a tagged release.
-        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.3.0"),
+        // The engine contract is consumed via tagged URL; the Qwen3TTS core is pinned to a tagged
+        // release. Bumped to 0.15.0 (contract 1.14.0) for the split-footprint efficiency contract.
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.15.0"),
         .package(url: "https://github.com/xocialize/qwen3-tts-mlx-swift.git", from: "0.1.0"),
     ],
     targets: [

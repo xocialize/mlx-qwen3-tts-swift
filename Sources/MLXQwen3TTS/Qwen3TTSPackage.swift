@@ -17,7 +17,9 @@ import Qwen3TTSCloning
 /// The reference transcript rides the canonical `TTSRequest.referenceTranscript` field
 /// (contract 1.1.0 — promoted from `metaData` when this wrap surfaced the gap).
 /// `metaData` keys (package-specific, C5): `language` (synthesis language, default from
-/// configuration), `instruct` (CustomVoice emotion instruct / VoiceDesign voice description).
+/// configuration), `instruct` (CustomVoice emotion instruct / VoiceDesign voice description),
+/// `seed` (Int — pins the sampled voice for character consistency; with the VoiceDesign
+/// checkpoint this is the Voice Library "Character" seed, stable across chunks of a take).
 @InferenceActor
 public final class Qwen3TTSPackage: ModelPackage {
     public typealias Configuration = Qwen3TTSConfiguration
@@ -31,15 +33,19 @@ public final class Qwen3TTSPackage: ModelPackage {
                 sourceRepo: Qwen3TTSCheckpoint.default.repoID, revision: "main", tier: 1),
             requirements: RequirementsManifest(
                 // Footprints for the default 1.7B Base checkpoint across the full quant catalog
-                // (int5/int6 added in contract 1.1.0). Quantized Talker+CodePredictor plus the
-                // bf16 codec stack (decoder/encoder/speaker encoder) and headroom.
-                // Static-manifest caveat (same as mlx-qwen-llm-swift): admission gates on the
-                // default variant; per-configured-checkpoint gating is a follow-up (gap log).
+                // (int5/int6 added in contract 1.1.0). Split per contract 1.14: persistent weights
+                // (quantized Talker+CodePredictor + bf16 codec stack + headroom) in `residentBytes`,
+                // and the MEASURED autoregressive Talker transient in `peakActivationBytes` (the
+                // engine reserves a single transient across residents — see memory-harness.md).
+                // The precise per-configured-checkpoint split rides `FootprintConfigured` on the
+                // configuration (variant × size × quant); these static rows are the default-variant
+                // fallback for a registration that doesn't carry a config hint.
                 footprints: Qwen3TTSCheckpointQuant.allCases.map { quant in
-                    QuantFootprint(
+                    let ckpt = Qwen3TTSCheckpoint(variant: .base, size: .s1_7B, quant: quant)
+                    return QuantFootprint(
                         quant: quant.toolKitQuant,
-                        residentBytes: Qwen3TTSCheckpoint(variant: .base, size: .s1_7B, quant: quant)
-                            .estimatedResidentBytes)
+                        residentBytes: ckpt.estimatedResidentBytes,
+                        peakActivationBytes: ckpt.estimatedPeakActivationBytes)
                 },
                 requiredBackends: [.metalGPU],
                 os: OSRequirement(minMacOS: SemanticVersion(major: 26, minor: 0, patch: 0)),
@@ -132,14 +138,30 @@ public final class Qwen3TTSPackage: ModelPackage {
         let language = tts.metaData.stringValue("language") ?? configuration.defaultLanguage
         let instruct = tts.metaData.stringValue("instruct")
 
+        // Sampling: the VoiceDesign checkpoint wants its creative preset; everything else uses
+        // defaults. `metaData["seed"]` pins the voice (Voice Library "Character" consistency) —
+        // the core re-seeds the RNG before generation, so the same seed yields the same timbre
+        // across chunks of a long take.
+        var sampling = (configuration.checkpoint.variant == .voiceDesign)
+            ? SamplingConfig.voiceDesign : SamplingConfig()
+        if let seed = tts.metaData.intValue("seed") {
+            // Clamp to 32-bit. Large 64-bit seeds (≳5×10^18) produce Gumbel-noise patterns
+            // that never favor EOS → runaway/infinite generation (verified in prior dub work;
+            // the core's `speakerSeed` truncates for the same reason). Guard at the engine
+            // boundary so no supplied seed can reach MLXRandom.seed unclamped.
+            sampling.seed = UInt64(bitPattern: Int64(seed)) & 0xFFFF_FFFF
+        }
+
         let samples: [Float]
         switch tts.voice.selection {
         case .auto:
-            samples = model.synthesize(text: tts.text, language: language, instruct: instruct)
+            samples = model.synthesize(
+                text: tts.text, language: language, instruct: instruct, sampling: sampling)
 
         case .named(let speaker):
             samples = model.synthesize(
-                text: tts.text, language: language, speaker: speaker, instruct: instruct)
+                text: tts.text, language: language, speaker: speaker, instruct: instruct,
+                sampling: sampling)
 
         case .referenceAudio(let reference):
             if let referenceText = tts.referenceTranscript,
@@ -254,6 +276,12 @@ extension MetaData {
     /// Convenience: read a string-valued metaData key.
     func stringValue(_ key: String) -> String? {
         if case .string(let value)? = self[key] { return value }
+        return nil
+    }
+
+    /// Convenience: read an int-valued metaData key (e.g. a voice seed).
+    func intValue(_ key: String) -> Int? {
+        if case .int(let value)? = self[key] { return value }
         return nil
     }
 }
