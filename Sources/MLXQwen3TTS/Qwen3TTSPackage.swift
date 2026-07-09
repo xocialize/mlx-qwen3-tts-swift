@@ -5,6 +5,13 @@ import Qwen3TTS
 import AudioCommon
 import Qwen3TTSCloning
 
+/// Errors specific to the Qwen3-TTS package boundary.
+public enum Qwen3TTSError: Error, Equatable {
+    /// Weight sources are missing and there is no store root (or resolved directory) to
+    /// materialize into.
+    case missingWeights(String)
+}
+
 /// Qwen3-TTS exposing the canonical `tts` surface: base synthesis, CustomVoice preset
 /// speakers (`.named`), and voice cloning from reference audio (`.referenceAudio`) — x-vector
 /// by default, full ICL (~0.89 speaker similarity) when `metaData["referenceText"]` carries
@@ -86,32 +93,45 @@ public final class Qwen3TTSPackage: ModelPackage {
     public func load() async throws {
         guard model == nil else { return }
 
-        // Resolve weight directories. With a models root set, materialize both repos under it
-        // (<root>/<namespace>/<name>); otherwise pass repo ids through to the core's default cache.
-        let modelRef: String
-        let tokenizerRef: String
-        if let root = configuration.modelsRootDirectory {
-            modelRef = try await Self.materialize(
-                repoID: configuration.checkpoint.repoID, under: root,
-                additionalFiles: ["vocab.json", "merges.txt", "tokenizer_config.json"])
-            tokenizerRef = try await Self.materialize(
-                repoID: Qwen3TTSCheckpoint.tokenizerRepoID, under: root)
-        } else {
-            modelRef = configuration.checkpoint.repoID
-            tokenizerRef = Qwen3TTSCheckpoint.tokenizerRepoID
+        // Auto-materialize missing sources into the engine store (dir-less configs only; explicit
+        // directories never touch the network). The download code is the core's existing
+        // HuggingFaceDownloader (it already lands snapshots in the store layout,
+        // <root>/<org>/<name>); the WeightSourcing delta is the declared missing-set + progress
+        // forwarding — source i of n maps onto fraction [i/n, (i+1)/n) so the engine's
+        // PreparationMonitor shows one monotonic `.downloading` bar.
+        let storeRoot = configuration.modelsRootDirectory
+        let missing = configuration.missingWeightSources(storeRoot: storeRoot)
+        if !missing.isEmpty {
+            guard let storeRoot else {
+                throw Qwen3TTSError.missingWeights(
+                    "no models root set and sources missing: \(missing.map(\.role).joined(separator: ", "))")
+            }
+            for (index, source) in missing.enumerated() {
+                let base = Double(index) / Double(missing.count)
+                let span = 1.0 / Double(missing.count)
+                try await HuggingFaceDownloader.downloadWeights(
+                    modelId: source.repo,
+                    to: storeRoot.appendingPathComponent(source.repo),
+                    additionalFiles: source.role == "model"
+                        ? Qwen3TTSConfiguration.modelSidecarFiles : [],
+                    progressHandler: { fraction in
+                        WeightDownloadProgress.report(fraction: base + span * fraction)
+                    })
+                try Task.checkCancellation()
+            }
         }
-
         try Task.checkCancellation()
+
+        // Load from the resolved (explicit-or-store) directories.
+        let resolved = configuration.resolved(storeRoot: storeRoot)
+        guard let modelDir = resolved.modelDirectory,
+              let tokenizerDir = resolved.tokenizerDirectory else {
+            throw Qwen3TTSError.missingWeights("unresolved weight directories (no store root)")
+        }
         let loaded = try await Qwen3TTSModel.fromPretrained(
-            modelId: modelRef, tokenizerModelId: tokenizerRef)
+            modelId: modelDir.path, tokenizerModelId: tokenizerDir.path)
 
         // A wrapper-owned tokenizer instance for the cloning engine (the model's is private).
-        let modelDir: URL
-        if FileManager.default.fileExists(atPath: modelRef) {
-            modelDir = URL(fileURLWithPath: modelRef)
-        } else {
-            modelDir = try HuggingFaceDownloader.getCacheDirectory(for: modelRef)
-        }
         let vocabURL = modelDir.appendingPathComponent("vocab.json")
         if FileManager.default.fileExists(atPath: vocabURL.path) {
             let tok = Qwen3Tokenizer()
@@ -211,21 +231,6 @@ public final class Qwen3TTSPackage: ModelPackage {
         hasher.combine(text)
         hasher.combine(language)
         return hasher.finalize()
-    }
-
-    // MARK: - Weights materialization
-
-    /// Download a repo's weights under `<root>/<namespace>/<name>` (idempotent) and return the
-    /// local path, which the core's `fromPretrained` accepts in place of a repo id.
-    private nonisolated static func materialize(
-        repoID: String, under root: URL, additionalFiles: [String] = []
-    ) async throws -> String {
-        let dir = root.appendingPathComponent(repoID)
-        if !HuggingFaceDownloader.weightsExist(in: dir) {
-            try await HuggingFaceDownloader.downloadWeights(
-                modelId: repoID, to: dir, additionalFiles: additionalFiles)
-        }
-        return dir.path
     }
 
     // MARK: - Canonical Audio codec (serialized round-trip form, C3)

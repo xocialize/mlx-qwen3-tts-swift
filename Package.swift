@@ -18,8 +18,10 @@ let package = Package(
     ],
     dependencies: [
         // The engine contract is consumed via tagged URL; the Qwen3TTS core is pinned to a tagged
-        // release. Bumped to 0.15.0 (contract 1.14.0) for the split-footprint efficiency contract.
-        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.15.0"),
+        // release. Bumped to 0.23.0 for the WeightSourcing auto-materialization contract
+        // (types ≥0.19.0). No swift-huggingface dep needed here — downloads ride the core's
+        // HuggingFaceDownloader, which already lands snapshots in the store layout.
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.23.0"),
         .package(url: "https://github.com/xocialize/qwen3-tts-mlx-swift.git", from: "0.1.0"),
         // mlx-swift, for MLX.Memory.clearCache() in the wrapper's unload(). Pinned to the
         // revision the Qwen3TTS core already resolves (0.31.4) so this adds no resolution churn.
@@ -47,6 +49,8 @@ let package = Package(
                 "MLXQwen3TTS",
                 // Test-only: admissibility sanity check through the engine.
                 .product(name: "MLXServeCore", package: "mlx-engine-swift"),
+                // The offline MAT-1..5 materialization gate.
+                .product(name: "MLXServeConformance", package: "mlx-engine-swift"),
             ]
         ),
     ]
