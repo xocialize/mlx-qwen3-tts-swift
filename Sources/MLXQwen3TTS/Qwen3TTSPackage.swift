@@ -151,11 +151,14 @@ public final class Qwen3TTSPackage: ModelPackage {
     }
 
     public func run(_ request: any CapabilityRequest) async throws -> any CapabilityResponse {
+        // CAN-1: the entry checkpoint is the FIRST act of run() — before notLoaded validation
+        // (engine ≥ 0.27.0). Mid-run cadence: the core's Talker loops bail per generated frame
+        // (E3, `Task.isCancelled` break) and the post-synthesis checkpoint below rethrows.
+        try Task.checkCancellation()
         guard let model else { throw PackageError.notLoaded }
         guard request.capability == .tts, let tts = request as? TTSRequest else {
             throw PackageError.unsupportedCapability(request.capability)
         }
-        try Task.checkCancellation()
 
         let language = tts.metaData.stringValue("language") ?? configuration.defaultLanguage
         let instruct = tts.metaData.stringValue("instruct")
