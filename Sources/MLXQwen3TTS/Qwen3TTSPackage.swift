@@ -59,7 +59,11 @@ public final class Qwen3TTSPackage: ModelPackage {
                 os: OSRequirement(minMacOS: SemanticVersion(major: 26, minor: 0, patch: 0)),
                 chipFloor: nil
             ),
-            specialties: [],
+            specialties: [
+                // Zero-shot voice cloning is Qwen3-TTS's core selection axis (shared with
+                // IndexTTS2 / VoxCPM2 / Gepard); no native emotion/duration control plane.
+                SpecialtyWeight(.voiceClone, strength: 1.0),
+            ],
             surfaces: [
                 TTSContract.descriptor(
                     name: "qwen3-tts",
