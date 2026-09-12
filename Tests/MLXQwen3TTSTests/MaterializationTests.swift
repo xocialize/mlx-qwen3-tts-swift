@@ -70,11 +70,15 @@ final class MaterializationTests: XCTestCase {
             .appending(path: "qwen3tts-store-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let cfg = Qwen3TTSConfiguration()
+        // Paths from ModelStore so the fixture tracks the engine's canonical models--org--name
+        // layout (contract 1.22.0), not a stale literal — the 0.28.1 → 0.54.0 pin bump exposed
+        // the `org/name` literals this test used to build.
+        let store = ModelStore(root: root)
         // Empty store: both sources missing.
         XCTAssertEqual(cfg.missingWeightSources(storeRoot: root).map(\.role),
                        ["model", "tokenizer"])
         // Populate ONLY the shared tokenizer repo → the model source alone stays missing.
-        let tokDir = root.appending(path: Qwen3TTSCheckpoint.tokenizerRepoID)
+        let tokDir = store.directory(for: Qwen3TTSCheckpoint.tokenizerRepoID)!
         try FileManager.default.createDirectory(at: tokDir, withIntermediateDirectories: true)
         for f in ["config.json", "model.safetensors"] {
             FileManager.default.createFile(atPath: tokDir.appending(path: f).path,
@@ -82,7 +86,7 @@ final class MaterializationTests: XCTestCase {
         }
         XCTAssertEqual(cfg.missingWeightSources(storeRoot: root).map(\.role), ["model"])
         // Populate the checkpoint repo → nothing missing; a DIFFERENT checkpoint still misses.
-        let modelDir = root.appending(path: cfg.checkpoint.repoID)
+        let modelDir = store.directory(for: cfg.checkpoint.repoID)!
         try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
         for f in ["config.json", "vocab.json", "model.safetensors"] {
             FileManager.default.createFile(atPath: modelDir.appending(path: f).path,
@@ -105,9 +109,10 @@ final class MaterializationTests: XCTestCase {
     func testPrewarmPathsUseResolvedStoreLayout() {
         let root = URL(fileURLWithPath: "/tmp/some-store")
         let cfg = Qwen3TTSConfiguration(modelsRootDirectory: root)
+        let store = ModelStore(root: root)   // canonical layout, never a literal
         XCTAssertEqual(cfg.prewarmPaths.map(\.path), [
-            root.appending(path: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit").path,
-            root.appending(path: "Qwen/Qwen3-TTS-Tokenizer-12Hz").path,
+            store.directory(for: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit")!.path,
+            store.directory(for: "Qwen/Qwen3-TTS-Tokenizer-12Hz")!.path,
         ])
     }
 

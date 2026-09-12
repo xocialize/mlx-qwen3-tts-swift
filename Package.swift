@@ -23,7 +23,8 @@ let package = Package(
         // (MLXServeConformance.CancellationConformance). No swift-huggingface dep needed here —
         // downloads ride the core's HuggingFaceDownloader, which already lands snapshots in the
         // store layout.
-        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.28.1"),
+        // 0.54.0 ⊇ contract 1.38.0: the E12 controls plane (TTSControls + typed emotion/targetDuration).
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.54.0"),
         .package(url: "https://github.com/xocialize/qwen3-tts-mlx-swift.git", from: "0.1.0"),
         // mlx-swift, for MLX.Memory.clearCache() in the wrapper's unload(). Pinned to the
         // revision the Qwen3TTS core already resolves (0.31.4) so this adds no resolution churn.

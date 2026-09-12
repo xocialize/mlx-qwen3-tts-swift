@@ -68,8 +68,16 @@ public final class Qwen3TTSPackage: ModelPackage {
                 TTSContract.descriptor(
                     name: "qwen3-tts",
                     summary: "Qwen3-TTS multilingual text-to-speech with preset speakers and "
-                        + "reference-audio voice cloning (.wav, 24 kHz).",
-                    modes: [.neutral, .expressive]
+                        + "reference-audio voice cloning (.wav, 24 kHz). E12 typed plane: `emotion` "
+                        + "as .textDescription (a delivery instruction, the model's native `instruct`) "
+                        + "or .categorical over the shared 8-name vocabulary, rendered to an instruction; "
+                        + "metaData.instruct remains the compat path. No native duration control.",
+                    modes: [.neutral, .expressive],
+                    // E12 declaration (contract 1.38.0, AB-A-0049 part 3): Qwen3-TTS steers delivery
+                    // by instruction text, so both declared modes land on `instruct`. No native
+                    // duration control — consumers time-stretch (E8 v2) for cue fit.
+                    controls: TTSControls(emotionModes: [.categorical, .textDescription],
+                                          supportsTargetDuration: false)
                 )
             ]
         )
@@ -165,7 +173,9 @@ public final class Qwen3TTSPackage: ModelPackage {
         }
 
         let language = tts.metaData.stringValue("language") ?? configuration.defaultLanguage
-        let instruct = tts.metaData.stringValue("instruct")
+        // E12 typed plane (contract 1.38.0): `tts.emotion` wins; `metaData["instruct"]` is the
+        // compatibility path. Both land on the model's `instruct` string.
+        let instruct = try Self.resolveInstruct(typed: tts.emotion, meta: tts.metaData.stringValue("instruct"))
 
         // Sampling: the VoiceDesign checkpoint wants its creative preset; everything else uses
         // defaults. `metaData["seed"]` pins the voice (Voice Library "Character" consistency) —
@@ -297,5 +307,53 @@ extension MetaData {
     func intValue(_ key: String) -> Int? {
         if case .int(let value)? = self[key] { return value }
         return nil
+    }
+}
+
+// MARK: - E12 typed plane → `instruct`
+
+extension Qwen3TTSPackage {
+    /// The typed `TTSRequest.emotion` wins; `metaData["instruct"]` is the compatibility path.
+    /// `.textDescription` IS the instruct string; `.categorical` renders one canonical name into
+    /// the delivery sentence below. `.vector` / `.referenceAudio` are not declared, so the engine
+    /// refuses them pre-admission and a direct caller is refused here, legibly.
+    nonisolated static func resolveInstruct(typed: TTSEmotion?, meta: String?) throws -> String? {
+        guard let typed else { return meta }
+        switch typed {
+        case .textDescription(let direction):
+            return direction
+        case .categorical(let label):
+            guard let emotion = E12Emotion.resolve(label) else {
+                throw PackageError.unsupportedRequestFeature(
+                    "emotion '\(label)' — known: \(E12Emotion.knownLabels)")
+            }
+            return emotion.instruct
+        case .vector:
+            throw PackageError.unsupportedRequestFeature(
+                "emotion.vector — Qwen3-TTS steers by instruction text; send .categorical or .textDescription")
+        case .referenceAudio:
+            throw PackageError.unsupportedRequestFeature(
+                "emotion.referenceAudio — Qwen3-TTS steers by instruction text; send .categorical or .textDescription")
+        @unknown default:
+            throw PackageError.unsupportedRequestFeature("emotion — mode not known to this package")
+        }
+    }
+}
+
+extension E12Emotion {
+    /// The delivery instruction each canonical category renders to — the sentences ML[X] Audio
+    /// Studio's Dub section shipped on the metaData path (2026-09-01), kept verbatim so the typed
+    /// path is byte-for-byte what the consumer already sends.
+    public var instruct: String {
+        switch self {
+        case .happy: "Speak cheerfully and with energy."
+        case .angry: "Speak with intensity and force."
+        case .sad: "Speak softly with a sad tone."
+        case .afraid: "Speak nervously, with urgency."
+        case .disgusted: "Speak with distaste."
+        case .melancholic: "Speak slowly, with a melancholy tone."
+        case .surprised: "Speak with surprise and wonder."
+        case .calm: "Speak calmly and evenly."
+        }
     }
 }

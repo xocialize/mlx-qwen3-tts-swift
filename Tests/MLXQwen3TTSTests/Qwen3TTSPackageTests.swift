@@ -121,3 +121,49 @@ import MLXToolKit
         }
     }
 }
+
+// MARK: - E12 typed plane (contract 1.38.0, AB-A-0049 part 3)
+
+@Suite struct E12ControlsTests {
+    @Test func declaresInstructionSteeringOnly() {
+        let surface = Qwen3TTSPackage.manifest.surfaces[0]
+        #expect(surface.ttsControls?.emotionModes == [.categorical, .textDescription])
+        #expect(surface.ttsControls?.supportsTargetDuration == false)
+        #expect(surface.parameters.contains { $0.name == "emotion" })
+        #expect(!surface.parameters.contains { $0.name == "targetDuration" })
+        #expect(surface.controlsMatchCapability)
+    }
+
+    @Test func typedTextDescriptionIsTheInstructString() throws {
+        #expect(try Qwen3TTSPackage.resolveInstruct(typed: .textDescription("sound exhausted"), meta: nil)
+                == "sound exhausted")
+        // Typed wins over the compat path; absent, the compat path is untouched.
+        #expect(try Qwen3TTSPackage.resolveInstruct(typed: .textDescription("a"), meta: "b") == "a")
+        #expect(try Qwen3TTSPackage.resolveInstruct(typed: nil, meta: "b") == "b")
+        #expect(try Qwen3TTSPackage.resolveInstruct(typed: nil, meta: nil) == nil)
+    }
+
+    @Test func categoricalRendersTheSharedVocabularyToAnInstruction() throws {
+        #expect(try Qwen3TTSPackage.resolveInstruct(typed: .categorical("happy"), meta: nil)
+                == "Speak cheerfully and with energy.")
+        // Aliases from the emotion2vec 9-way set resolve.
+        #expect(try Qwen3TTSPackage.resolveInstruct(typed: .categorical("Fearful"), meta: nil)
+                == E12Emotion.afraid.instruct)
+        #expect(try Qwen3TTSPackage.resolveInstruct(typed: .categorical("neutral"), meta: nil)
+                == E12Emotion.calm.instruct)
+        #expect(E12Emotion.allCases.map(\.rawValue)
+                == ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"])
+    }
+
+    @Test func undeclaredModesAndUnknownLabelsAreRefusedLegibly() {
+        #expect(throws: PackageError.self) {
+            try Qwen3TTSPackage.resolveInstruct(typed: .categorical("ecstatic"), meta: nil)
+        }
+        #expect(throws: PackageError.self) {
+            try Qwen3TTSPackage.resolveInstruct(typed: .vector([0.1]), meta: nil)
+        }
+        #expect(throws: PackageError.self) {
+            try Qwen3TTSPackage.resolveInstruct(typed: .referenceAudio(Audio(data: Data())), meta: nil)
+        }
+    }
+}
